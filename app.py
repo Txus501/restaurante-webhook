@@ -162,50 +162,64 @@ def parse_pickaxe_data(raw_data_field, data):
         pass
     
     raw_str = str(raw_data_field).strip()
-    kv_pattern = re.compile(r'^\w+:\s*', re.IGNORECASE)
-    parts = [p.strip() for p in raw_str.split('|')]
-    has_kv_format = any(kv_pattern.match(p) for p in parts[:4])
+    KNOWN_KEYS = r'(?:nombre|name|telefono|phone|tel|email|correo|mail|menu|platos|pedido|order)'
     
-    if has_kv_format:
+    # Detectar si el string contiene claves conocidas con formato clave: valor
+    has_named_keys = bool(re.search(KNOWN_KEYS + r'\s*:', raw_str, re.IGNORECASE))
+    
+    if has_named_keys:
+        # Extraer cada campo usando regex que busca la clave seguida de su valor
+        # hasta la siguiente clave conocida o el final del string
+        # Esto funciona independientemente del separador (| o ,)
+        pattern = re.compile(
+            r'(' + KNOWN_KEYS + r')\s*:\s*(.+?)'
+            r'(?=\s*[|,]\s*' + KNOWN_KEYS + r'\s*:|$)',
+            re.IGNORECASE | re.DOTALL
+        )
+        matches = pattern.findall(raw_str)
         menu_parts = []
-        for part in parts:
-            part = part.strip()
-            kv_match = re.match(r'^(\w+):\s*(.*)$', part, re.IGNORECASE)
-            if kv_match:
-                key = kv_match.group(1).lower().strip()
-                value = kv_match.group(2).strip()
-                if key in ['nombre', 'name']:
-                    data['nombre'] = value
-                elif key in ['telefono', 'phone', 'tel', 'telephone']:
-                    data['telefono'] = value
-                elif key in ['email', 'correo', 'mail']:
-                    data['email'] = value
-                elif key in ['menu', 'platos', 'pedido', 'order']:
-                    menu_parts.append(value)
-                else:
-                    menu_parts.append(part)
-            else:
-                if data.get('menu') or menu_parts:
-                    menu_parts.append(part)
         
-        if menu_parts:
-            data['menu'] = ' | '.join(menu_parts)
+        for key, value in matches:
+            key = key.lower().strip()
+            value = value.strip().strip(',').strip('|').strip()
+            if key in ['nombre', 'name']:
+                data['nombre'] = value
+            elif key in ['telefono', 'phone', 'tel', 'telephone']:
+                data['telefono'] = value
+            elif key in ['email', 'correo', 'mail']:
+                data['email'] = value
+            elif key in ['menu', 'platos', 'pedido', 'order']:
+                # El menú puede contener pipes como separadores de platos
+                data['menu'] = value
+        
+        # Si hay teléfono al inicio antes de las claves (formato: "655999888, nombre: X")
+        if not data.get('telefono'):
+            first_token_match = re.match(r'^([+\d\s\-]{7,15})\s*[,|]', raw_str)
+            if first_token_match:
+                data['telefono'] = first_token_match.group(1).replace(' ', '').replace('-', '')
+        
+        return data
     
-    elif '|' in raw_str:
-        if len(parts) >= 1:
-            data['telefono'] = parts[0].strip()
-        if len(parts) >= 2:
-            data['nombre'] = parts[1].strip()
-        if len(parts) >= 3:
-            data['email'] = parts[2].strip()
-        if len(parts) >= 4:
-            data['menu'] = ' | '.join(parts[3:]).strip()
+    # Sin claves nombradas: intentar formato posicional con pipes
+    pipe_parts = [p.strip() for p in raw_str.split('|')]
+    if len(pipe_parts) >= 2:
+        data['telefono'] = pipe_parts[0].strip()
+        data['nombre'] = pipe_parts[1].strip() if len(pipe_parts) > 1 else ''
+        data['email'] = pipe_parts[2].strip() if len(pipe_parts) > 2 else ''
+        data['menu'] = ' | '.join(pipe_parts[3:]).strip() if len(pipe_parts) > 3 else ''
+        return data
     
-    else:
-        pairs = re.findall(r'(\w+):\s*([^,]+?)(?:,|$)', raw_str)
-        for key, value in pairs:
-            data[key.strip().lower()] = value.strip()
+    # Formato posicional con comas
+    comma_parts = [p.strip() for p in raw_str.split(',')]
+    if len(comma_parts) >= 2:
+        data['telefono'] = comma_parts[0].strip()
+        data['nombre'] = comma_parts[1].strip() if len(comma_parts) > 1 else ''
+        data['email'] = comma_parts[2].strip() if len(comma_parts) > 2 else ''
+        data['menu'] = ', '.join(comma_parts[3:]).strip() if len(comma_parts) > 3 else ''
+        return data
     
+    # Fallback: asumir que todo es el teléfono
+    data['telefono'] = raw_str
     return data
 
 @app.route("/", methods=["GET"])
